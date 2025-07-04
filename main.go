@@ -26,6 +26,7 @@ import (
 const (
 	DefaultCleanupTTL = 1 * time.Hour
 	FilenamePrefix    = "mcp-clip-"
+	MaxCASRetries     = 1000 // Maximum retries for compare-and-swap operations
 )
 
 type clipboardState struct {
@@ -34,11 +35,11 @@ type clipboardState struct {
 }
 
 type ClipboardServer struct {
-	lastClipboard atomic.Value // stores clipboardState
-	running       int32        // atomic flag for monitoring state
-	cancel        context.CancelFunc
-	sessionFiles  []string     // track files created during this session
-	filesMutex    sync.Mutex   // protect sessionFiles slice
+	lastClipboard atomic.Value                       // stores clipboardState
+	running       int32                              // atomic flag for monitoring state
+	cancel        atomic.Pointer[context.CancelFunc] // FIXED: Now uses atomic pointer
+	sessionFiles  []string                           // track files created during this session
+	filesMutex    sync.Mutex                         // protect sessionFiles slice
 }
 
 func NewClipboardServer() *ClipboardServer {
@@ -47,23 +48,48 @@ func NewClipboardServer() *ClipboardServer {
 	return cs
 }
 
+// updateClipboard atomically updates clipboard state using CAS loop to prevent race conditions.
+// Returns true if content changed, false if content was already present.
 func (cs *ClipboardServer) updateClipboard(content string) bool {
 	if content == "" {
 		return false
 	}
-	
-	// Get current state
-	currentState, _ := cs.getLastClipboard()
-	
-	// Only update if content has changed
-	if content != currentState {
-		cs.lastClipboard.Store(clipboardState{
+
+	// Atomic compare-and-swap loop with retry limit for memory safety
+	for retries := 0; retries < MaxCASRetries; retries++ {
+		current := cs.lastClipboard.Load()
+		currentState, ok := current.(clipboardState)
+		if !ok {
+			// Fallback for uninitialized state
+			currentState = clipboardState{}
+		}
+
+		// Only update if content has changed
+		if content == currentState.content {
+			return false
+		}
+
+		newState := clipboardState{
 			content: content,
 			time:    time.Now(),
-		})
-		return true
+		}
+
+		// Atomic compare-and-swap ensures no race condition
+		if cs.lastClipboard.CompareAndSwap(current, newState) {
+			return true
+		}
+		// If CAS failed, another goroutine updated the state, retry
 	}
-	return false
+
+	// Fallback to simple store if max retries exceeded (extremely unlikely)
+	if os.Getenv("MCP_DEBUG") == "1" {
+		fmt.Fprintf(os.Stderr, "Warning: CAS retry limit exceeded in updateClipboard, using fallback\n")
+	}
+	cs.lastClipboard.Store(clipboardState{
+		content: content,
+		time:    time.Now(),
+	})
+	return true
 }
 
 func (cs *ClipboardServer) getLastClipboard() (string, time.Time) {
@@ -76,6 +102,10 @@ func (cs *ClipboardServer) getLastClipboard() (string, time.Time) {
 func (cs *ClipboardServer) addSessionFile(filePath string) {
 	cs.filesMutex.Lock()
 	defer cs.filesMutex.Unlock()
+	// Don't track files during shutdown to prevent race condition
+	if atomic.LoadInt32(&cs.running) == 0 {
+		return
+	}
 	cs.sessionFiles = append(cs.sessionFiles, filePath)
 }
 
@@ -85,7 +115,7 @@ func (cs *ClipboardServer) cleanupSessionFiles() {
 	copy(files, cs.sessionFiles)
 	cs.sessionFiles = nil
 	cs.filesMutex.Unlock()
-	
+
 	var removed, errors int
 	for _, filePath := range files {
 		if err := os.Remove(filePath); err != nil {
@@ -100,7 +130,7 @@ func (cs *ClipboardServer) cleanupSessionFiles() {
 			}
 		}
 	}
-	
+
 	if os.Getenv("MCP_DEBUG") == "1" && (removed > 0 || errors > 0) {
 		fmt.Fprintf(os.Stderr, "Session cleanup: %d removed, %d errors\n", removed, errors)
 	}
@@ -110,9 +140,10 @@ func (cs *ClipboardServer) stop() {
 	if atomic.CompareAndSwapInt32(&cs.running, 1, 0) {
 		// Clean up session files on graceful shutdown
 		cs.cleanupSessionFiles()
-		
-		if cs.cancel != nil {
-			cs.cancel()
+
+		// FIXED: Use atomic pointer load
+		if cancelPtr := cs.cancel.Load(); cancelPtr != nil {
+			(*cancelPtr)()
 		}
 	}
 }
@@ -176,7 +207,7 @@ func main() {
 
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
-	clipboardServer.cancel = cancel
+	clipboardServer.cancel.Store(&cancel)
 
 	// Handle shutdown signals
 	sigChan := make(chan os.Signal, 1)
@@ -220,7 +251,7 @@ func (cs *ClipboardServer) readClipboardHandler(ctx context.Context, request mcp
 	}
 
 	const maxDirectOutput = 25000
-	
+
 	switch format {
 	case "text":
 		if len(content) > maxDirectOutput {
@@ -305,17 +336,17 @@ func readClipboardDataWSL2() ([]byte, error) {
 	if powershellPath == "" {
 		return nil, fmt.Errorf("PowerShell not found - required for WSL2 clipboard access")
 	}
-	
+
 	textCmd := exec.Command(powershellPath, "-Command", "Get-Clipboard -Raw")
 	textOutput, textErr := textCmd.Output()
-	
+
 	if textErr == nil && len(textOutput) > 0 {
 		content := strings.TrimSpace(string(textOutput))
 		if content != "" {
 			return []byte(content), nil
 		}
 	}
-	
+
 	imageCmd := exec.Command(powershellPath, "-Command", `
 		$image = Get-Clipboard -Format Image
 		if ($image -ne $null) {
@@ -325,7 +356,7 @@ func readClipboardDataWSL2() ([]byte, error) {
 		}
 	`)
 	imageOutput, imageErr := imageCmd.Output()
-	
+
 	if imageErr == nil && len(imageOutput) > 0 {
 		content := strings.TrimSpace(string(imageOutput))
 		if content != "" {
@@ -336,7 +367,7 @@ func readClipboardDataWSL2() ([]byte, error) {
 			return data, nil
 		}
 	}
-	
+
 	return []byte{}, nil
 }
 
@@ -344,18 +375,18 @@ func isWSL2() bool {
 	if runtime.GOOS != "linux" {
 		return false
 	}
-	
+
 	if _, err := os.Stat("/proc/version"); err != nil {
 		return false
 	}
-	
+
 	content, err := os.ReadFile("/proc/version")
 	if err != nil {
 		return false
 	}
-	
-	return strings.Contains(strings.ToLower(string(content)), "microsoft") || 
-		   strings.Contains(strings.ToLower(string(content)), "wsl")
+
+	return strings.Contains(strings.ToLower(string(content)), "microsoft") ||
+		strings.Contains(strings.ToLower(string(content)), "wsl")
 }
 
 func findPowerShell() string {
@@ -364,18 +395,18 @@ func findPowerShell() string {
 		"/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe",
 		"/mnt/c/windows/system32/windowspowershell/v1.0/powershell.exe",
 	}
-	
+
 	for _, path := range powershellPaths {
 		if _, err := os.Stat(path); err == nil {
 			return path
 		}
 	}
-	
+
 	cmd := exec.Command("which", "powershell.exe")
 	if output, err := cmd.Output(); err == nil {
 		return strings.TrimSpace(string(output))
 	}
-	
+
 	return ""
 }
 
@@ -399,12 +430,12 @@ func cleanupExpiredFiles() error {
 	tempDir := os.TempDir()
 	ttl := getCleanupTTL()
 	cutoffTime := time.Now().Add(-ttl)
-	
+
 	files, err := filepath.Glob(filepath.Join(tempDir, FilenamePrefix+"*"))
 	if err != nil {
 		return fmt.Errorf("failed to list temp files: %v", err)
 	}
-	
+
 	var removed, errors int
 	for _, filePath := range files {
 		if shouldRemoveFile(filePath, cutoffTime) {
@@ -421,34 +452,34 @@ func cleanupExpiredFiles() error {
 			}
 		}
 	}
-	
+
 	if os.Getenv("MCP_DEBUG") == "1" && (removed > 0 || errors > 0) {
 		fmt.Fprintf(os.Stderr, "Cleanup complete: %d removed, %d errors\n", removed, errors)
 	}
-	
+
 	return nil
 }
 
 func shouldRemoveFile(filePath string, cutoffTime time.Time) bool {
 	filename := filepath.Base(filePath)
-	
+
 	// Extract timestamp from filename: mcp-clip-{timestamp}-{hash}.{ext}
 	if !strings.HasPrefix(filename, FilenamePrefix) {
 		return false
 	}
-	
+
 	parts := strings.Split(strings.TrimPrefix(filename, FilenamePrefix), "-")
 	if len(parts) < 2 {
 		// Old format without timestamp, remove it
 		return true
 	}
-	
+
 	timestamp, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
 		// Invalid timestamp format, remove it
 		return true
 	}
-	
+
 	fileTime := time.Unix(timestamp, 0)
 	return fileTime.Before(cutoffTime)
 }
@@ -461,35 +492,47 @@ func saveToTempFile(data []byte, extension string, cs *ClipboardServer) (string,
 			fmt.Fprintf(os.Stderr, "Cleanup warning: %v\n", err)
 		}
 	}
-	
+
 	hash := md5.Sum(data)
 	timestamp := time.Now().Unix()
 	filename := fmt.Sprintf("mcp-clip-%d-%s.%s", timestamp, hex.EncodeToString(hash[:]), extension)
 	tempDir := os.TempDir()
 	filePath := filepath.Join(tempDir, filename)
-	
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		err = os.WriteFile(filePath, data, 0600) // More restrictive permissions
-		if err != nil {
-			return "", fmt.Errorf("failed to write temp file %s: %v", filePath, err)
+
+	// FIXED: Use atomic file creation with O_CREATE|O_EXCL to prevent TOCTOU race
+	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		if os.IsExist(err) {
+			// File already exists, return the path
+			return filePath, nil
 		}
-		
-		if os.Getenv("MCP_DEBUG") == "1" {
-			fmt.Fprintf(os.Stderr, "Created temp file: %s (%d bytes)\n", filePath, len(data))
-		}
-		
-		// Track file for session cleanup if server instance provided
-		if cs != nil {
-			cs.addSessionFile(filePath)
-		}
+		return "", fmt.Errorf("failed to create temp file %s (extension: %s, size: %d bytes, tempDir: %s): %v",
+			filePath, extension, len(data), tempDir, err)
 	}
-	
+	defer file.Close()
+
+	if _, err := file.Write(data); err != nil {
+		// Clean up partially created file
+		os.Remove(filePath)
+		return "", fmt.Errorf("failed to write temp file %s (extension: %s, size: %d bytes): %v",
+			filePath, extension, len(data), err)
+	}
+
+	if os.Getenv("MCP_DEBUG") == "1" {
+		fmt.Fprintf(os.Stderr, "Created temp file: %s (%d bytes)\n", filePath, len(data))
+	}
+
+	// Track file for session cleanup if server instance provided
+	if cs != nil {
+		cs.addSessionFile(filePath)
+	}
+
 	return filePath, nil
 }
 
 func handleBinaryContent(data []byte, cs *ClipboardServer) (*mcp.CallToolResult, error) {
 	isImage, imageType := detectImageType(data)
-	
+
 	if isImage {
 		filePath, err := saveToTempFile(data, imageType, cs)
 		if err != nil {
@@ -497,10 +540,10 @@ func handleBinaryContent(data []byte, cs *ClipboardServer) (*mcp.CallToolResult,
 		}
 		return mcp.NewToolResultText(fmt.Sprintf("Clipboard image content (%s, %d bytes). Saved to: %s", imageType, len(data), filePath)), nil
 	}
-	
+
 	encoded := base64.StdEncoding.EncodeToString(data)
 	const maxDirectOutput = 25000
-	
+
 	if len(encoded) > maxDirectOutput {
 		filePath, err := saveToTempFile([]byte(encoded), "b64", cs)
 		if err != nil {
@@ -508,7 +551,7 @@ func handleBinaryContent(data []byte, cs *ClipboardServer) (*mcp.CallToolResult,
 		}
 		return mcp.NewToolResultText(fmt.Sprintf("Clipboard binary content too large (%d bytes base64). Saved to: %s", len(encoded), filePath)), nil
 	}
-	
+
 	return mcp.NewToolResultText(fmt.Sprintf("Clipboard binary content (base64 encoded):\n%s", encoded)), nil
 }
 
@@ -516,27 +559,27 @@ func detectImageType(data []byte) (bool, string) {
 	if len(data) < 8 {
 		return false, ""
 	}
-	
+
 	if data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47 {
 		return true, "png"
 	}
-	
+
 	if data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
 		return true, "jpg"
 	}
-	
+
 	if len(data) >= 6 && string(data[0:6]) == "GIF87a" || string(data[0:6]) == "GIF89a" {
 		return true, "gif"
 	}
-	
+
 	if len(data) >= 12 && string(data[8:12]) == "WEBP" {
 		return true, "webp"
 	}
-	
+
 	if data[0] == 0x42 && data[1] == 0x4D {
 		return true, "bmp"
 	}
-	
+
 	return false, ""
 }
 
@@ -606,20 +649,20 @@ func printUsage() {
 
 func handleTestCommand() {
 	fmt.Println("Testing clipboard functionality...")
-	
+
 	content, err := readClipboard()
 	if err != nil {
 		fmt.Printf("❌ Failed to read clipboard: %v\n", err)
 		return
 	}
-	
+
 	if content == "" {
 		fmt.Println("📋 Clipboard is empty")
 		return
 	}
-	
+
 	fmt.Printf("📋 Clipboard content detected (%d bytes)\n", len(content))
-	
+
 	if isProbablyText(content) {
 		fmt.Println("📝 Content type: Text")
 		if len(content) <= 100 {
@@ -631,6 +674,6 @@ func handleTestCommand() {
 		fmt.Println("🖼️  Content type: Binary (possibly image)")
 		fmt.Printf("📦 Base64 preview: %s...\n", base64.StdEncoding.EncodeToString([]byte(content))[:50])
 	}
-	
+
 	fmt.Println("✅ Clipboard test completed successfully")
 }
