@@ -382,7 +382,14 @@ func findPowerShell() string {
 func getCleanupTTL() time.Duration {
 	if ttlStr := os.Getenv("MCP_CLEANUP_TTL"); ttlStr != "" {
 		if ttl, err := time.ParseDuration(ttlStr); err == nil {
+			if os.Getenv("MCP_DEBUG") == "1" {
+				fmt.Fprintf(os.Stderr, "Using custom cleanup TTL: %v\n", ttl)
+			}
 			return ttl
+		} else {
+			if os.Getenv("MCP_DEBUG") == "1" {
+				fmt.Fprintf(os.Stderr, "Invalid MCP_CLEANUP_TTL format '%s', using default: %v\n", ttlStr, DefaultCleanupTTL)
+			}
 		}
 	}
 	return DefaultCleanupTTL

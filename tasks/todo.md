@@ -139,10 +139,10 @@ wait $PID
 - Add debug logging for cleanup operations
 
 **Success Criteria**:
-- [ ] `MCP_CLEANUP_TTL` controls file age threshold (default: 1 hour)
-- [ ] README documents temp file creation and cleanup
-- [ ] Debug logging shows cleanup operations when `MCP_DEBUG=1`
-- [ ] Run: Test with custom TTL values
+- [x] `MCP_CLEANUP_TTL` controls file age threshold (default: 1 hour)
+- [x] README documents temp file creation and cleanup
+- [x] Debug logging shows cleanup operations when `MCP_DEBUG=1`
+- [x] Run: Test with custom TTL values
 
 **Validation Commands**:
 ```bash

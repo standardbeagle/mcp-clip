@@ -7,9 +7,11 @@ A Model Context Protocol (MCP) server that provides clipboard access for MCP cli
 - 📋 **Clipboard Reading**: Read current clipboard content
 - 🔄 **Auto-monitoring**: Automatic clipboard change detection
 - 📝 **Text Support**: Full text clipboard support
-- 🖼️ **Image Support**: Binary content (images) encoded as base64
+- 🖼️ **Image Support**: Binary content (images) with smart format detection
 - 🎯 **Smart Detection**: Automatic content type detection
-- 📢 **Notifications**: Real-time clipboard change notifications (console output)
+- 📁 **Large Content Handling**: Automatic temp file creation for content >25KB
+- 🧹 **Automatic Cleanup**: TTL-based cleanup of temp files
+- 🔒 **Secure**: Restrictive file permissions and safe cleanup
 
 ## Installation
 
@@ -93,15 +95,35 @@ The server intelligently detects content types:
 - ✅ **macOS**: Native clipboard support
 - ✅ **Windows**: Native clipboard support
 
+## Large Content & Temp Files
+
+When clipboard content exceeds 25KB, the server automatically saves it to temporary files instead of returning it directly (due to MCP protocol limitations).
+
+### Temp File Behavior:
+- **Location**: System temp directory (`/tmp` on Unix, `%TEMP%` on Windows)
+- **Naming**: `mcp-clip-{timestamp}-{hash}.{extension}`
+- **Permissions**: 0600 (owner read/write only)
+- **Automatic Cleanup**: Files older than 1 hour are automatically removed
+
+### Cleanup Strategy:
+- **On-demand**: Cleanup runs before creating new temp files
+- **Startup**: Orphaned files from previous sessions are cleaned
+- **Graceful shutdown**: Session files are cleaned on SIGTERM/SIGINT
+- **Safe**: Only removes mcp-clip files, preserves other applications' files
+
 ## Environment Variables
 
-- `MCP_DEBUG=1`: Enable debug logging (if implemented)
+- `MCP_DEBUG=1`: Enable debug logging for troubleshooting
+- `MCP_CLEANUP_TTL=1h`: File age threshold for cleanup (default: 1 hour)
+  - Accepts Go duration format: `30m`, `2h`, `1h30m`, etc.
 
 ## Security & Privacy
 
 - The server only reads clipboard content when explicitly requested via the `read_clipboard` tool
 - Clipboard monitoring only detects changes but doesn't read content until requested
-- No clipboard content is stored or persisted
+- Temp files use restrictive permissions (0600) - only readable by file owner
+- Automatic cleanup prevents temp file accumulation
+- No clipboard content is stored or persisted beyond temp files
 - No network communication beyond MCP protocol
 
 ## Use Cases
