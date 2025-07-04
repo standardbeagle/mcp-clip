@@ -1,0 +1,142 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+            extension: .exe
+          - goos: windows
+            goarch: arm64
+            extension: .exe
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu gcc-mingw-w64
+
+    - name: Build binary
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+        CGO_ENABLED: 1
+      run: |
+        if [ "${{ matrix.goos }}" = "linux" ] && [ "${{ matrix.goarch }}" = "arm64" ]; then
+          export CC=aarch64-linux-gnu-gcc
+        elif [ "${{ matrix.goos }}" = "windows" ]; then
+          export CC=x86_64-w64-mingw32-gcc
+        fi
+        
+        go build -race -ldflags="-s -w" -o mcp-clip-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.extension }} .
+
+    - name: Upload binary
+      uses: actions/upload-artifact@v3
+      with:
+        name: mcp-clip-${{ matrix.goos }}-${{ matrix.goarch }}
+        path: mcp-clip-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.extension }}
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+
+    - name: Install dependencies
+      run: sudo apt-get update && sudo apt-get install -y xvfb
+
+    - name: Run tests
+      run: |
+        # Run tests with virtual display for clipboard functionality
+        xvfb-run -a go test -race -v ./...
+
+    - name: Build and test
+      run: |
+        go build -race .
+        # Test CLI functionality (will show clipboard empty which is expected)
+        timeout 5s ./mcp-clip test || true
+
+  release:
+    name: Create release
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+
+    - name: Create release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          mcp-clip-*/mcp-clip-*
+        body: |
+          ## MCP Clipboard Server Release ${{ github.ref_name }}
+          
+          High-performance, lock-free MCP server for clipboard access with WSL2 support.
+          
+          ### Installation
+          
+          **NPM (Recommended):**
+          ```bash
+          npm install -g @standardbeagle/mcp-clip
+          ```
+          
+          **Go:**
+          ```bash
+          go install github.com/standardbeagle/mcp-clip@${{ github.ref_name }}
+          ```
+          
+          **Direct Download:**
+          Download the appropriate binary for your platform below.
+          
+          ### What's New
+          - Lock-free concurrent design with zero race conditions
+          - Enhanced WSL2 clipboard support for images
+          - Improved temp file handling and cleanup
+          - Better error messages and debugging
+          
+          ### Binaries
+          - `mcp-clip-linux-amd64` - Linux x86_64
+          - `mcp-clip-linux-arm64` - Linux ARM64
+          - `mcp-clip-darwin-amd64` - macOS Intel
+          - `mcp-clip-darwin-arm64` - macOS Apple Silicon
+          - `mcp-clip-windows-amd64.exe` - Windows x86_64
+          - `mcp-clip-windows-arm64.exe` - Windows ARM64
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

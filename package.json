@@ -1,0 +1,49 @@
+{
+  "name": "@standardbeagle/mcp-clip",
+  "version": "1.0.0",
+  "description": "High-performance MCP server for clipboard access with WSL2 support",
+  "keywords": [
+    "mcp",
+    "clipboard",
+    "wsl2",
+    "claude",
+    "vscode",
+    "ai",
+    "assistant",
+    "model-context-protocol"
+  ],
+  "author": "StandardBeagle",
+  "license": "MIT",
+  "homepage": "https://github.com/standardbeagle/mcp-clip#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/standardbeagle/mcp-clip.git"
+  },
+  "bugs": {
+    "url": "https://github.com/standardbeagle/mcp-clip/issues"
+  },
+  "bin": {
+    "mcp-clip": "./bin/mcp-clip"
+  },
+  "files": [
+    "bin/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "postinstall": "node install.js",
+    "test": "echo \"Run 'mcp-clip test' to test clipboard functionality\""
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
+}

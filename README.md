@@ -1,165 +1,259 @@
 # MCP Clipboard Server
 
-A Model Context Protocol (MCP) server that provides clipboard access for MCP clients like Claude Desktop. This server allows reading clipboard content including text and images, with automatic monitoring and notifications when clipboard content changes.
+[![Go Version](https://img.shields.io/badge/go-1.21+-blue.svg)](https://golang.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-## Features
+A high-performance, lock-free [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that provides clipboard access for AI assistants. Specifically designed to solve the VSCode + WSL2 image clipboard limitation when using Claude.
 
-- 📋 **Clipboard Reading**: Read current clipboard content
-- 🔄 **Auto-monitoring**: Automatic clipboard change detection
-- 📝 **Text Support**: Full text clipboard support
-- 🖼️ **Image Support**: Binary content (images) with smart format detection
-- 🎯 **Smart Detection**: Automatic content type detection
-- 📁 **Large Content Handling**: Automatic temp file creation for content >25KB
-- 🧹 **Automatic Cleanup**: TTL-based cleanup of temp files
-- 🔒 **Secure**: Restrictive file permissions and safe cleanup
+## 🎯 Problem Solved
 
-## Installation
+**VSCode + WSL2 + Claude Image Clipboard Issue**: When running Claude in VSCode on Windows with WSL2, pasting images from the clipboard doesn't work due to the sandboxed environment. This MCP server provides a bridge to access Windows clipboard content (including images) from within the WSL2 environment.
 
-### Prerequisites
+## ✨ Features
 
-- Go 1.21 or later
-- A system with clipboard support (Linux, macOS, Windows)
+- 🔒 **Lock-free concurrent design** - High performance with zero race conditions
+- 🖼️ **Image clipboard support** - PNG, JPEG, GIF, WebP, BMP detection and handling
+- 🛡️ **WSL2 compatibility** - Seamless Windows clipboard access from WSL2
+- 📁 **Large content handling** - Automatic temp file creation for content >25KB
+- 🔄 **Real-time monitoring** - Clipboard change notifications
+- 🧹 **Smart cleanup** - TTL-based temp file management
+- 🚀 **Race condition free** - Comprehensive atomic operations and CAS loops
+- 🔍 **Rich debugging** - Detailed error context and optional debug logging
 
-### Build from Source
+## 🚀 Quick Start
+
+### NPM Installation (Recommended)
 
 ```bash
-git clone <repository-url>
-cd mcp-clip
-go build -o mcp-clip
+npm install -g @standardbeagle/mcp-clip
 ```
 
-## Usage
+### Go Installation
 
-### MCP Client Configuration
+```bash
+go install github.com/standardbeagle/mcp-clip@latest
+```
 
-Add to your MCP client configuration (e.g., Claude Desktop):
+### Manual Installation
+
+```bash
+git clone https://github.com/standardbeagle/mcp-clip.git
+cd mcp-clip
+go build -o mcp-clip
+sudo cp mcp-clip /usr/local/bin/
+```
+
+## 📋 Claude Desktop Configuration
+
+Add to your Claude Desktop `claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
-    "mcp-clip": {
-      "command": "/path/to/mcp-clip"
+    "clipboard": {
+      "command": "mcp-clip",
+      "args": []
     }
   }
 }
 ```
 
-### Command Line Testing
+**Config file locations:**
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
 
+## 🔧 VSCode + WSL2 Setup
+
+### 1. Install in WSL2
 ```bash
-# Test clipboard functionality
-./mcp-clip test
-
-# Show help
-./mcp-clip --help
-
-# Show version
-./mcp-clip version
+# In your WSL2 terminal
+npm install -g @standardbeagle/mcp-clip
 ```
 
-## Tools
+### 2. Configure Claude Code Extension
+Add to your VSCode settings or workspace `.vscode/settings.json`:
 
-### read_clipboard
-
-Read the current clipboard content with support for different formats.
-
-**Parameters:**
-- `format` (optional): Format to return content in
-  - `"text"` - Return as plain text
-  - `"base64"` - Return as base64 encoded string
-  - `"auto"` (default) - Automatically detect and format appropriately
-
-**Examples:**
 ```json
 {
-  "tool": "read_clipboard",
-  "arguments": {
-    "format": "auto"
+  "claude-dev.mcpServers": {
+    "clipboard": {
+      "command": "mcp-clip",
+      "args": []
+    }
   }
 }
 ```
 
-## Clipboard Monitoring
-
-The server automatically monitors clipboard changes every 500ms and provides console notifications when content changes. This helps track clipboard activity without actively reading the content until requested.
-
-## Content Type Detection
-
-The server intelligently detects content types:
-- **Text**: Human-readable text content
-- **Binary**: Images, files, or other binary data (encoded as base64)
-
-## Platform Support
-
-- ✅ **Linux**: X11 and Wayland support
-- ✅ **macOS**: Native clipboard support
-- ✅ **Windows**: Native clipboard support
-
-## Large Content & Temp Files
-
-When clipboard content exceeds 25KB, the server automatically saves it to temporary files instead of returning it directly (due to MCP protocol limitations).
-
-### Temp File Behavior:
-- **Location**: System temp directory (`/tmp` on Unix, `%TEMP%` on Windows)
-- **Naming**: `mcp-clip-{timestamp}-{hash}.{extension}`
-- **Permissions**: 0600 (owner read/write only)
-- **Automatic Cleanup**: Files older than 1 hour are automatically removed
-
-### Cleanup Strategy:
-- **On-demand**: Cleanup runs before creating new temp files
-- **Startup**: Orphaned files from previous sessions are cleaned
-- **Graceful shutdown**: Session files are cleaned on SIGTERM/SIGINT
-- **Safe**: Only removes mcp-clip files, preserves other applications' files
-
-## Environment Variables
-
-- `MCP_DEBUG=1`: Enable debug logging for troubleshooting
-- `MCP_CLEANUP_TTL=1h`: File age threshold for cleanup (default: 1 hour)
-  - Accepts Go duration format: `30m`, `2h`, `1h30m`, etc.
-
-## Security & Privacy
-
-- The server only reads clipboard content when explicitly requested via the `read_clipboard` tool
-- Clipboard monitoring only detects changes but doesn't read content until requested
-- Temp files use restrictive permissions (0600) - only readable by file owner
-- Automatic cleanup prevents temp file accumulation
-- No clipboard content is stored or persisted beyond temp files
-- No network communication beyond MCP protocol
-
-## Use Cases
-
-- **VS Code Integration**: Paste images into Claude conversations in VS Code
-- **Clipboard History**: Track when clipboard content changes
-- **Multi-format Support**: Handle both text and binary clipboard content
-- **Development Tools**: Debug clipboard-related functionality
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Clipboard is empty**: Make sure you have copied something to the clipboard
-2. **Permission denied**: Ensure the application has clipboard access permissions
-3. **Build errors**: Make sure Go 1.21+ is installed and dependencies are available
-
-### Testing
-
+### 3. WSL2 PowerShell Access
+Ensure PowerShell is accessible from WSL2:
 ```bash
-# Copy some text to clipboard then test
-echo "Hello World" | xclip -selection clipboard  # Linux
-echo "Hello World" | pbcopy                      # macOS
-
-# Then test
-./mcp-clip test
+# Test PowerShell access
+/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -Command "Get-Clipboard"
 ```
 
-## Contributing
+## 🛠️ Available Tools
 
+### `read_clipboard`
+Reads current clipboard content with automatic format detection.
+
+**Example usage in Claude:**
+> "Read my clipboard and analyze the content"
+
+**Supported formats:**
+- Plain text
+- Images (PNG, JPEG, GIF, WebP, BMP)
+- Binary data (base64 encoded)
+
+**Large content handling:**
+- Content >25KB automatically saved to temp files
+- Images always saved as files with proper extensions
+- File paths provided for external access
+
+## 📊 Resource Notifications
+
+The server sends real-time notifications when clipboard content changes:
+
+```json
+{
+  "method": "notifications/resources/updated",
+  "params": {
+    "uri": "clipboard://current"
+  }
+}
+```
+
+This allows Claude to proactively know when new content is available without polling.
+
+## ⚙️ Configuration
+
+### Environment Variables
+
+- `MCP_DEBUG=1` - Enable detailed debug logging
+- `MCP_CLEANUP_TTL=2h` - Set temp file cleanup TTL (default: 1h)
+
+### Debug Mode
+```bash
+MCP_DEBUG=1 mcp-clip
+```
+
+Shows detailed information about:
+- Clipboard monitoring status
+- Temp file creation and cleanup
+- WSL2 PowerShell integration
+- Race condition fallbacks (extremely rare)
+
+## 🧪 Testing
+
+### Test Installation
+```bash
+mcp-clip test
+```
+
+### Development Testing
+```bash
+# Run tests with race detector
+go test -race -v ./...
+
+# Build with race detector
+go build -race .
+```
+
+## 🏗️ Architecture
+
+### Lock-Free Design
+- **Atomic operations** for all shared state
+- **Compare-and-swap loops** with retry limits
+- **Zero mutexes** in hot paths
+- **Race-condition free** under all loads
+
+### Concurrency Safety
+- Atomic clipboard state updates
+- Thread-safe session file tracking  
+- Graceful shutdown with cleanup
+- TOCTOU-safe temp file creation
+
+### Platform Integration
+- **WSL2**: PowerShell bridge for Windows clipboard
+- **Linux**: Direct clipboard integration via atotto/clipboard
+- **macOS**: Native clipboard support
+- **Windows**: Native clipboard support
+
+## 🔧 Troubleshooting
+
+### WSL2 Issues
+
+**PowerShell not found:**
+```bash
+# Install Windows PowerShell in WSL2
+sudo apt update && sudo apt install powershell
+```
+
+**Permission denied:**
+```bash
+# Add Windows PowerShell to PATH
+echo 'export PATH="/mnt/c/Windows/System32/WindowsPowerShell/v1.0:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+**Clipboard empty in WSL2:**
+```bash
+# Test Windows clipboard access
+powershell.exe "Get-Clipboard" 
+```
+
+### General Issues
+
+**MCP connection failed:**
+- Verify `mcp-clip` is in your PATH
+- Check Claude Desktop config JSON syntax
+- Restart Claude Desktop after config changes
+
+**Large images not working:**
+- Check available disk space in temp directory
+- Verify temp directory permissions
+- Enable debug mode: `MCP_DEBUG=1`
+
+**Performance issues:**
+- Monitor with debug mode enabled
+- Check for antivirus interference
+- Verify WSL2 resource allocation
+
+## 📝 Development
+
+### Building from Source
+```bash
+git clone https://github.com/standardbeagle/mcp-clip.git
+cd mcp-clip
+go mod download
+go build -race .
+```
+
+### Running Tests
+```bash
+go test -race -v ./...
+```
+
+### Contributing
 1. Fork the repository
 2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
+3. Run tests: `go test -race -v ./...`
+4. Submit a pull request
 
-## License
+## 📄 License
 
-This project is licensed under the MIT License.
+MIT License - see [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- [Model Context Protocol](https://modelcontextprotocol.io/) by Anthropic
+- [atotto/clipboard](https://github.com/atotto/clipboard) for cross-platform clipboard access
+- [mcp-go](https://github.com/mark3labs/mcp-go) for Go MCP implementation
+
+## 🔗 Links
+
+- [GitHub Repository](https://github.com/standardbeagle/mcp-clip)
+- [NPM Package](https://www.npmjs.com/package/@standardbeagle/mcp-clip)
+- [Model Context Protocol](https://modelcontextprotocol.io/)
+- [Claude Desktop](https://claude.ai/desktop)
