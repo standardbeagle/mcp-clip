@@ -51,11 +51,11 @@
 - Implement TTL-based cleanup logic
 
 **Success Criteria**:
-- [ ] New filename format includes timestamp
-- [ ] `cleanupExpiredFiles()` removes files older than 1 hour
-- [ ] Cleanup called before each `saveToTempFile()` operation
-- [ ] Run: `go build && ./mcp-clip test` - no functionality regression
-- [ ] Test: Create old temp files, trigger read, verify cleanup
+- [x] New filename format includes timestamp
+- [x] `cleanupExpiredFiles()` removes files older than 1 hour
+- [x] Cleanup called before each `saveToTempFile()` operation
+- [x] Run: `go build && ./mcp-clip test` - no functionality regression
+- [x] Test: Create old temp files, trigger read, verify cleanup
 
 **Validation Commands**:
 ```bash
@@ -78,10 +78,10 @@ ls /tmp/mcp-clip-* | head -5  # Verify new filename format
 - Clean expired mcp-clip files from previous instances
 
 **Success Criteria**:
-- [ ] Startup cleanup runs once during server initialization
-- [ ] Only removes files matching mcp-clip pattern and expired TTL
-- [ ] Run: Create old temp files, restart server, verify cleanup
-- [ ] Test: Files from other applications are not touched
+- [x] Startup cleanup runs once during server initialization
+- [x] Only removes files matching mcp-clip pattern and expired TTL
+- [x] Run: Create old temp files, restart server, verify cleanup
+- [x] Test: Files from other applications are not touched
 
 **Validation Commands**:
 ```bash

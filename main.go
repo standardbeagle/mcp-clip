@@ -109,6 +109,17 @@ func main() {
 
 	clipboardServer := NewClipboardServer()
 
+	// Cleanup orphaned temp files from previous instances on startup
+	if os.Getenv("MCP_DEBUG") == "1" {
+		fmt.Fprintf(os.Stderr, "Running startup cleanup...\n")
+	}
+	if err := cleanupExpiredFiles(); err != nil {
+		// Log warning but don't fail startup
+		if os.Getenv("MCP_DEBUG") == "1" {
+			fmt.Fprintf(os.Stderr, "Startup cleanup warning: %v\n", err)
+		}
+	}
+
 	s := server.NewMCPServer(
 		"mcp-clip",
 		"1.0.0",
@@ -545,14 +556,6 @@ func printUsage() {
 func handleTestCommand() {
 	fmt.Println("Testing clipboard functionality...")
 	
-	// Test cleanup functionality
-	fmt.Println("\n🧹 Testing cleanup functionality...")
-	if err := cleanupExpiredFiles(); err != nil {
-		fmt.Printf("❌ Cleanup failed: %v\n", err)
-	} else {
-		fmt.Println("✅ Cleanup completed")
-	}
-	
 	content, err := readClipboard()
 	if err != nil {
 		fmt.Printf("❌ Failed to read clipboard: %v\n", err)
@@ -565,17 +568,6 @@ func handleTestCommand() {
 	}
 	
 	fmt.Printf("📋 Clipboard content detected (%d bytes)\n", len(content))
-	
-	// Test temp file creation if content is large
-	if len(content) > 25000 {
-		fmt.Println("📁 Testing temp file creation...")
-		filePath, err := saveToTempFile([]byte(content), "txt")
-		if err != nil {
-			fmt.Printf("❌ Failed to create temp file: %v\n", err)
-		} else {
-			fmt.Printf("✅ Created temp file: %s\n", filePath)
-		}
-	}
 	
 	if isProbablyText(content) {
 		fmt.Println("📝 Content type: Text")
