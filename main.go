@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -36,6 +37,8 @@ type ClipboardServer struct {
 	lastClipboard atomic.Value // stores clipboardState
 	running       int32        // atomic flag for monitoring state
 	cancel        context.CancelFunc
+	sessionFiles  []string     // track files created during this session
+	filesMutex    sync.Mutex   // protect sessionFiles slice
 }
 
 func NewClipboardServer() *ClipboardServer {
@@ -70,8 +73,44 @@ func (cs *ClipboardServer) getLastClipboard() (string, time.Time) {
 	return "", time.Time{}
 }
 
+func (cs *ClipboardServer) addSessionFile(filePath string) {
+	cs.filesMutex.Lock()
+	defer cs.filesMutex.Unlock()
+	cs.sessionFiles = append(cs.sessionFiles, filePath)
+}
+
+func (cs *ClipboardServer) cleanupSessionFiles() {
+	cs.filesMutex.Lock()
+	files := make([]string, len(cs.sessionFiles))
+	copy(files, cs.sessionFiles)
+	cs.sessionFiles = nil
+	cs.filesMutex.Unlock()
+	
+	var removed, errors int
+	for _, filePath := range files {
+		if err := os.Remove(filePath); err != nil {
+			errors++
+			if os.Getenv("MCP_DEBUG") == "1" {
+				fmt.Fprintf(os.Stderr, "Failed to remove session file %s: %v\n", filePath, err)
+			}
+		} else {
+			removed++
+			if os.Getenv("MCP_DEBUG") == "1" {
+				fmt.Fprintf(os.Stderr, "Removed session file: %s\n", filePath)
+			}
+		}
+	}
+	
+	if os.Getenv("MCP_DEBUG") == "1" && (removed > 0 || errors > 0) {
+		fmt.Fprintf(os.Stderr, "Session cleanup: %d removed, %d errors\n", removed, errors)
+	}
+}
+
 func (cs *ClipboardServer) stop() {
 	if atomic.CompareAndSwapInt32(&cs.running, 1, 0) {
+		// Clean up session files on graceful shutdown
+		cs.cleanupSessionFiles()
+		
 		if cs.cancel != nil {
 			cs.cancel()
 		}
@@ -185,7 +224,7 @@ func (cs *ClipboardServer) readClipboardHandler(ctx context.Context, request mcp
 	switch format {
 	case "text":
 		if len(content) > maxDirectOutput {
-			filePath, err := saveToTempFile([]byte(content), "txt")
+			filePath, err := saveToTempFile([]byte(content), "txt", cs)
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to save large content to temp file: %v", err)), nil
 			}
@@ -195,7 +234,7 @@ func (cs *ClipboardServer) readClipboardHandler(ctx context.Context, request mcp
 	case "base64":
 		encoded := base64.StdEncoding.EncodeToString([]byte(content))
 		if len(encoded) > maxDirectOutput {
-			filePath, err := saveToTempFile([]byte(encoded), "b64")
+			filePath, err := saveToTempFile([]byte(encoded), "b64", cs)
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("Failed to save large base64 content to temp file: %v", err)), nil
 			}
@@ -205,7 +244,7 @@ func (cs *ClipboardServer) readClipboardHandler(ctx context.Context, request mcp
 	case "auto":
 		if isProbablyText(content) {
 			if len(content) > maxDirectOutput {
-				filePath, err := saveToTempFile([]byte(content), "txt")
+				filePath, err := saveToTempFile([]byte(content), "txt", cs)
 				if err != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("Failed to save large text content to temp file: %v", err)), nil
 				}
@@ -213,7 +252,7 @@ func (cs *ClipboardServer) readClipboardHandler(ctx context.Context, request mcp
 			}
 			return mcp.NewToolResultText(fmt.Sprintf("Clipboard text content:\n%s", content)), nil
 		} else {
-			return handleBinaryContent([]byte(content))
+			return handleBinaryContent([]byte(content), cs)
 		}
 	default:
 		return mcp.NewToolResultError(fmt.Sprintf("Unknown format: %s. Use 'text', 'base64', or 'auto'", format)), nil
@@ -407,7 +446,7 @@ func shouldRemoveFile(filePath string, cutoffTime time.Time) bool {
 	return fileTime.Before(cutoffTime)
 }
 
-func saveToTempFile(data []byte, extension string) (string, error) {
+func saveToTempFile(data []byte, extension string, cs *ClipboardServer) (string, error) {
 	// Clean up expired files before creating new ones
 	if err := cleanupExpiredFiles(); err != nil {
 		// Log error but don't fail - cleanup is best effort
@@ -431,16 +470,21 @@ func saveToTempFile(data []byte, extension string) (string, error) {
 		if os.Getenv("MCP_DEBUG") == "1" {
 			fmt.Fprintf(os.Stderr, "Created temp file: %s (%d bytes)\n", filePath, len(data))
 		}
+		
+		// Track file for session cleanup if server instance provided
+		if cs != nil {
+			cs.addSessionFile(filePath)
+		}
 	}
 	
 	return filePath, nil
 }
 
-func handleBinaryContent(data []byte) (*mcp.CallToolResult, error) {
+func handleBinaryContent(data []byte, cs *ClipboardServer) (*mcp.CallToolResult, error) {
 	isImage, imageType := detectImageType(data)
 	
 	if isImage {
-		filePath, err := saveToTempFile(data, imageType)
+		filePath, err := saveToTempFile(data, imageType, cs)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to save image to temp file: %v", err)), nil
 		}
@@ -451,7 +495,7 @@ func handleBinaryContent(data []byte) (*mcp.CallToolResult, error) {
 	const maxDirectOutput = 25000
 	
 	if len(encoded) > maxDirectOutput {
-		filePath, err := saveToTempFile([]byte(encoded), "b64")
+		filePath, err := saveToTempFile([]byte(encoded), "b64", cs)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to save large binary content to temp file: %v", err)), nil
 		}

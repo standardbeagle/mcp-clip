@@ -107,10 +107,10 @@ ls /tmp/other-file.txt  # Should still exist
 - Clean tracked files during graceful shutdown
 
 **Success Criteria**:
-- [ ] Track temp files created during current session
-- [ ] Clean tracked files during graceful shutdown (SIGTERM/SIGINT)
-- [ ] Don't interfere with files from other processes
-- [ ] Run: Create files via tool, send SIGTERM, verify cleanup
+- [x] Track temp files created during current session
+- [x] Clean tracked files during graceful shutdown (SIGTERM/SIGINT)
+- [x] Don't interfere with files from other processes
+- [x] Run: Create files via tool, send SIGTERM, verify cleanup
 
 **Validation Commands**:
 ```bash
