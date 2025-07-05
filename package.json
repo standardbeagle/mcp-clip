@@ -1,6 +1,6 @@
 {
   "name": "@standardbeagle/mcp-clip",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "High-performance MCP server for clipboard access with WSL2 support",
   "keywords": [
     "mcp",
