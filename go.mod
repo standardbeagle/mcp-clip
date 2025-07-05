@@ -1,4 +1,4 @@
-module mcp-clip
+module github.com/standardbeagle/mcp-clip
 
 go 1.24.2
 
