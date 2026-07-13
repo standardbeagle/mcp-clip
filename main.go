@@ -18,15 +18,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/atotto/clipboard"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"golang.design/x/clipboard"
 )
 
 const (
 	DefaultCleanupTTL = 1 * time.Hour
 	FilenamePrefix    = "mcp-clip-"
-	MaxCASRetries     = 1000 // Maximum retries for compare-and-swap operations
+	CurrentResourceURI = "mcp-clip://current"
 )
 
 type clipboardState struct {
@@ -40,7 +40,10 @@ type ClipboardServer struct {
 	cancel        atomic.Pointer[context.CancelFunc] // FIXED: Now uses atomic pointer
 	sessionFiles  []string                           // track files created during this session
 	filesMutex    sync.Mutex                         // protect sessionFiles slice
+	mcpServer     *server.MCPServer                  // reference to MCP server
+	resourceRegistered bool                          // track if current resource is registered
 }
+
 
 func NewClipboardServer() *ClipboardServer {
 	cs := &ClipboardServer{}
@@ -48,48 +51,83 @@ func NewClipboardServer() *ClipboardServer {
 	return cs
 }
 
-// updateClipboard atomically updates clipboard state using CAS loop to prevent race conditions.
+// updateClipboard updates clipboard state with simple atomic store.
 // Returns true if content changed, false if content was already present.
 func (cs *ClipboardServer) updateClipboard(content string) bool {
-	if content == "" {
+	current := cs.lastClipboard.Load()
+	currentState, ok := current.(clipboardState)
+	if !ok {
+		currentState = clipboardState{}
+	}
+
+	// Only update if content has changed
+	if content == currentState.content {
 		return false
 	}
 
-	// Atomic compare-and-swap loop with retry limit for memory safety
-	for retries := 0; retries < MaxCASRetries; retries++ {
-		current := cs.lastClipboard.Load()
-		currentState, ok := current.(clipboardState)
-		if !ok {
-			// Fallback for uninitialized state
-			currentState = clipboardState{}
-		}
-
-		// Only update if content has changed
-		if content == currentState.content {
-			return false
-		}
-
-		newState := clipboardState{
-			content: content,
-			time:    time.Now(),
-		}
-
-		// Atomic compare-and-swap ensures no race condition
-		if cs.lastClipboard.CompareAndSwap(current, newState) {
-			return true
-		}
-		// If CAS failed, another goroutine updated the state, retry
-	}
-
-	// Fallback to simple store if max retries exceeded (extremely unlikely)
-	if os.Getenv("MCP_DEBUG") == "1" {
-		fmt.Fprintf(os.Stderr, "Warning: CAS retry limit exceeded in updateClipboard, using fallback\n")
-	}
-	cs.lastClipboard.Store(clipboardState{
+	newState := clipboardState{
 		content: content,
 		time:    time.Now(),
-	})
+	}
+
+	// Simple atomic store - good enough for clipboard updates
+	cs.lastClipboard.Store(newState)
+	
+	// Send notification about clipboard change
+	cs.sendClipboardChangeNotification(content)
+	
 	return true
+}
+
+// sendClipboardChangeNotification sends an MCP notification when clipboard changes
+func (cs *ClipboardServer) sendClipboardChangeNotification(content string) {
+	if cs.mcpServer == nil {
+		return
+	}
+	
+	// Determine content type and create appropriate notification
+	var notificationData map[string]interface{}
+	
+	if content == "" {
+		notificationData = map[string]interface{}{
+			"type": "empty",
+			"timestamp": time.Now().Unix(),
+		}
+	} else if isProbablyText(content) {
+		contentPreview := content
+		if len(content) > 200 {
+			contentPreview = content[:200] + "..."
+		}
+		
+		notificationData = map[string]interface{}{
+			"type": "text",
+			"size": len(content),
+			"preview": contentPreview,
+			"timestamp": time.Now().Unix(),
+			"resource_uri": CurrentResourceURI,
+		}
+	} else {
+		// Binary content
+		isImage, imageType := detectImageType([]byte(content))
+		contentType := "binary"
+		if isImage {
+			contentType = "image"
+		}
+		
+		notificationData = map[string]interface{}{
+			"type": contentType,
+			"format": imageType,
+			"size": len(content),
+			"timestamp": time.Now().Unix(),
+			"resource_uri": CurrentResourceURI,
+		}
+	}
+	
+	// Note: In a real implementation, we'd need access to the MCP server's notification sending mechanism
+	// This is a placeholder for the notification system
+	if os.Getenv("MCP_DEBUG") == "1" {
+		fmt.Fprintf(os.Stderr, "Clipboard change notification: %+v\n", notificationData)
+	}
 }
 
 func (cs *ClipboardServer) getLastClipboard() (string, time.Time) {
@@ -130,6 +168,8 @@ func (cs *ClipboardServer) cleanupSessionFiles() {
 			}
 		}
 	}
+
+	// Resource is registered once at startup, no need to clear
 
 	if os.Getenv("MCP_DEBUG") == "1" && (removed > 0 || errors > 0) {
 		fmt.Fprintf(os.Stderr, "Session cleanup: %d removed, %d errors\n", removed, errors)
@@ -194,16 +234,32 @@ func main() {
 		"mcp-clip",
 		"1.0.0",
 		server.WithToolCapabilities(true),
+		server.WithResourceCapabilities(true, true),
 	)
 
 	readClipboardTool := mcp.NewTool("read_clipboard",
 		mcp.WithDescription("Read the current clipboard content, supporting text and images"),
 		mcp.WithString("format",
-			mcp.Description("Format to return clipboard content in: 'text', 'base64', or 'auto' (default)"),
+			mcp.Description("Format to return clipboard content in: 'text', 'base64', 'file', or 'auto' (default)"),
+		),
+		mcp.WithString("output_path",
+			mcp.Description("Optional: Save binary content directly to specified file path (Windows only for images/binary)"),
+		),
+		mcp.WithString("chunk_size",
+			mcp.Description("Optional: For large content, split into chunks of this size (bytes). Default: 25000"),
+		),
+		mcp.WithString("chunk_index",
+			mcp.Description("Optional: Return specific chunk index (0-based) for large content"),
 		),
 	)
 
 	s.AddTool(readClipboardTool, clipboardServer.readClipboardHandler)
+
+	// Set reference to MCP server for resource management
+	clipboardServer.mcpServer = s
+	
+	// Register the current clipboard resource
+	clipboardServer.registerCurrentResource()
 
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -241,6 +297,26 @@ func (cs *ClipboardServer) readClipboardHandler(ctx context.Context, request mcp
 		format = f
 	}
 
+	outputPath := request.GetString("output_path", "")
+	chunkSize := 25000
+	if cs := request.GetString("chunk_size", ""); cs != "" {
+		if parsed, err := strconv.Atoi(cs); err == nil && parsed > 0 {
+			chunkSize = parsed
+		}
+	}
+	
+	chunkIndex := -1
+	if ci := request.GetString("chunk_index", ""); ci != "" {
+		if parsed, err := strconv.Atoi(ci); err == nil && parsed >= 0 {
+			chunkIndex = parsed
+		}
+	}
+
+	// Handle file format with direct binary extraction on Windows
+	if format == "file" || outputPath != "" {
+		return cs.handleFileOutput(outputPath)
+	}
+
 	content, err := readClipboard()
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to read clipboard: %v", err)), nil
@@ -250,44 +326,58 @@ func (cs *ClipboardServer) readClipboardHandler(ctx context.Context, request mcp
 		return mcp.NewToolResultText("Clipboard is empty"), nil
 	}
 
-	const maxDirectOutput = 25000
-
 	switch format {
 	case "text":
-		if len(content) > maxDirectOutput {
-			filePath, err := saveToTempFile([]byte(content), "txt", cs)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to save large content to temp file: %v", err)), nil
-			}
-			return mcp.NewToolResultText(fmt.Sprintf("Clipboard text content too large (%d bytes). Saved to: %s", len(content), filePath)), nil
-		}
-		return mcp.NewToolResultText(content), nil
+		return cs.handleTextContent(content, chunkSize, chunkIndex)
 	case "base64":
 		encoded := base64.StdEncoding.EncodeToString([]byte(content))
-		if len(encoded) > maxDirectOutput {
-			filePath, err := saveToTempFile([]byte(encoded), "b64", cs)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("Failed to save large base64 content to temp file: %v", err)), nil
-			}
-			return mcp.NewToolResultText(fmt.Sprintf("Base64 encoded clipboard content too large (%d bytes). Saved to: %s", len(encoded), filePath)), nil
-		}
-		return mcp.NewToolResultText(fmt.Sprintf("Base64 encoded clipboard content:\n%s", encoded)), nil
+		return cs.handleTextContent(encoded, chunkSize, chunkIndex)
 	case "auto":
 		if isProbablyText(content) {
-			if len(content) > maxDirectOutput {
-				filePath, err := saveToTempFile([]byte(content), "txt", cs)
-				if err != nil {
-					return mcp.NewToolResultError(fmt.Sprintf("Failed to save large text content to temp file: %v", err)), nil
-				}
-				return mcp.NewToolResultText(fmt.Sprintf("Clipboard text content too large (%d bytes). Saved to: %s", len(content), filePath)), nil
-			}
-			return mcp.NewToolResultText(fmt.Sprintf("Clipboard text content:\n%s", content)), nil
+			return cs.handleTextContent(content, chunkSize, chunkIndex)
 		} else {
 			return handleBinaryContent([]byte(content), cs)
 		}
 	default:
-		return mcp.NewToolResultError(fmt.Sprintf("Unknown format: %s. Use 'text', 'base64', or 'auto'", format)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("Unknown format: %s. Use 'text', 'base64', 'file', or 'auto'", format)), nil
 	}
+}
+
+// handleTextContent handles text content with optional chunking
+func (cs *ClipboardServer) handleTextContent(content string, chunkSize int, chunkIndex int) (*mcp.CallToolResult, error) {
+	if len(content) <= chunkSize {
+		// Content fits in a single response
+		return mcp.NewToolResultText(content), nil
+	}
+
+	// Content is large - handle chunking
+	totalChunks := (len(content) + chunkSize - 1) / chunkSize
+
+	if chunkIndex < 0 {
+		// Return metadata about chunks
+		resourceURI := cs.getCurrentResourceURI()
+		return mcp.NewToolResultText(fmt.Sprintf(
+			"Clipboard content too large (%d bytes). Available in %d chunks of %d bytes each.\n"+
+			"Use chunk_index parameter (0-%d) to get specific chunks, or access as resource: %s",
+			len(content), totalChunks, chunkSize, totalChunks-1, resourceURI)), nil
+	}
+
+	if chunkIndex >= totalChunks {
+		return mcp.NewToolResultError(fmt.Sprintf("Chunk index %d out of range (0-%d)", chunkIndex, totalChunks-1)), nil
+	}
+
+	// Return specific chunk
+	start := chunkIndex * chunkSize
+	end := start + chunkSize
+	if end > len(content) {
+		end = len(content)
+	}
+
+	chunk := content[start:end]
+	metadata := fmt.Sprintf("Chunk %d/%d (%d-%d of %d bytes):\n", 
+		chunkIndex+1, totalChunks, start, end-1, len(content))
+	
+	return mcp.NewToolResultText(metadata + chunk), nil
 }
 
 func (cs *ClipboardServer) startClipboardMonitoring(ctx context.Context) {
@@ -297,118 +387,81 @@ func (cs *ClipboardServer) startClipboardMonitoring(ctx context.Context) {
 	}
 	defer atomic.StoreInt32(&cs.running, 0)
 
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
+	// Initialize clipboard package
+	err := clipboard.Init()
+	if err != nil {
+		if os.Getenv("MCP_DEBUG") == "1" {
+			fmt.Fprintf(os.Stderr, "Failed to initialize clipboard: %v\n", err)
+		}
+		return
+	}
+
+	// Use event-driven clipboard monitoring
+	textChanges := clipboard.Watch(ctx, clipboard.FmtText)
+	imageChanges := clipboard.Watch(ctx, clipboard.FmtImage)
+
+	// Get initial clipboard state
+	if initialText := clipboard.Read(clipboard.FmtText); len(initialText) > 0 {
+		cs.updateClipboard(string(initialText))
+	} else if initialImage := clipboard.Read(clipboard.FmtImage); len(initialImage) > 0 {
+		cs.updateClipboard(string(initialImage))
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return // Graceful shutdown
-		case <-ticker.C:
-			content, err := readClipboard()
-			if err != nil {
-				// In debug mode, we could log this error
+		case textData, ok := <-textChanges:
+			if !ok {
 				if os.Getenv("MCP_DEBUG") == "1" {
-					fmt.Fprintf(os.Stderr, "Clipboard read error: %v\n", err)
+					fmt.Fprintf(os.Stderr, "Text clipboard channel closed\n")
 				}
-				continue
+				return
 			}
-
-			// Use lock-free update
-			cs.updateClipboard(content)
+			if len(textData) > 0 {
+				cs.updateClipboard(string(textData))
+			}
+		case imageData, ok := <-imageChanges:
+			if !ok {
+				if os.Getenv("MCP_DEBUG") == "1" {
+					fmt.Fprintf(os.Stderr, "Image clipboard channel closed\n")
+				}
+				return
+			}
+			if len(imageData) > 0 {
+				cs.updateClipboard(string(imageData))
+			}
 		}
 	}
+}
+
+// Helper function for min duration
+func min(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func readClipboard() (string, error) {
-	if isWSL2() {
-		data, err := readClipboardDataWSL2()
-		if err != nil {
-			return "", err
-		}
-		return string(data), nil
+	// Initialize clipboard access
+	if err := clipboard.Init(); err != nil {
+		return "", fmt.Errorf("failed to initialize clipboard: %v", err)
 	}
-	return clipboard.ReadAll()
+	
+	// Try text first
+	if textData := clipboard.Read(clipboard.FmtText); len(textData) > 0 {
+		return string(textData), nil
+	}
+	
+	// Try image if no text
+	if imageData := clipboard.Read(clipboard.FmtImage); len(imageData) > 0 {
+		return string(imageData), nil
+	}
+	
+	return "", nil
 }
 
-func readClipboardDataWSL2() ([]byte, error) {
-	powershellPath := findPowerShell()
-	if powershellPath == "" {
-		return nil, fmt.Errorf("PowerShell not found - required for WSL2 clipboard access")
-	}
-
-	textCmd := exec.Command(powershellPath, "-Command", "Get-Clipboard -Raw")
-	textOutput, textErr := textCmd.Output()
-
-	if textErr == nil && len(textOutput) > 0 {
-		content := strings.TrimSpace(string(textOutput))
-		if content != "" {
-			return []byte(content), nil
-		}
-	}
-
-	imageCmd := exec.Command(powershellPath, "-Command", `
-		$image = Get-Clipboard -Format Image
-		if ($image -ne $null) {
-			$ms = New-Object System.IO.MemoryStream
-			$image.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
-			[Convert]::ToBase64String($ms.ToArray())
-		}
-	`)
-	imageOutput, imageErr := imageCmd.Output()
-
-	if imageErr == nil && len(imageOutput) > 0 {
-		content := strings.TrimSpace(string(imageOutput))
-		if content != "" {
-			data, err := base64.StdEncoding.DecodeString(content)
-			if err != nil {
-				return nil, fmt.Errorf("failed to decode base64 image data: %v", err)
-			}
-			return data, nil
-		}
-	}
-
-	return []byte{}, nil
-}
-
-func isWSL2() bool {
-	if runtime.GOOS != "linux" {
-		return false
-	}
-
-	if _, err := os.Stat("/proc/version"); err != nil {
-		return false
-	}
-
-	content, err := os.ReadFile("/proc/version")
-	if err != nil {
-		return false
-	}
-
-	return strings.Contains(strings.ToLower(string(content)), "microsoft") ||
-		strings.Contains(strings.ToLower(string(content)), "wsl")
-}
-
-func findPowerShell() string {
-	powershellPaths := []string{
-		"/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
-		"/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe",
-		"/mnt/c/windows/system32/windowspowershell/v1.0/powershell.exe",
-	}
-
-	for _, path := range powershellPaths {
-		if _, err := os.Stat(path); err == nil {
-			return path
-		}
-	}
-
-	cmd := exec.Command("which", "powershell.exe")
-	if output, err := cmd.Output(); err == nil {
-		return strings.TrimSpace(string(output))
-	}
-
-	return ""
-}
 
 func getCleanupTTL() time.Duration {
 	if ttlStr := os.Getenv("MCP_CLEANUP_TTL"); ttlStr != "" {
@@ -484,6 +537,87 @@ func shouldRemoveFile(filePath string, cutoffTime time.Time) bool {
 	return fileTime.Before(cutoffTime)
 }
 
+func (cs *ClipboardServer) getCurrentResourceURI() string {
+	// Register the resource if not already done
+	if !cs.resourceRegistered && cs.mcpServer != nil {
+		cs.registerCurrentResource()
+	}
+	return CurrentResourceURI
+}
+
+func (cs *ClipboardServer) registerCurrentResource() {
+	resource := mcp.Resource{
+		URI:         CurrentResourceURI,
+		Name:        "current-clipboard",
+		Description: "Current clipboard content",
+		MIMEType:    "application/octet-stream", // Will be determined dynamically
+	}
+
+	// Create resource handler that reads current clipboard
+	handler := func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+		content, err := readClipboard()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read current clipboard: %v", err)
+		}
+
+		if content == "" {
+			return []mcp.ResourceContents{&mcp.TextResourceContents{
+				URI:      CurrentResourceURI,
+				MIMEType: "text/plain",
+				Text:     "",
+			}}, nil
+		}
+
+		data := []byte(content)
+		
+		// Determine content type and MIME type
+		if isProbablyText(content) {
+			return []mcp.ResourceContents{&mcp.TextResourceContents{
+				URI:      CurrentResourceURI,
+				MIMEType: "text/plain",
+				Text:     content,
+			}}, nil
+		} else {
+			// Binary content (likely image)
+			isImage, imageType := detectImageType(data)
+			var mimeType string
+			if isImage {
+				switch imageType {
+				case "png":
+					mimeType = "image/png"
+				case "jpg", "jpeg":
+					mimeType = "image/jpeg"
+				case "gif":
+					mimeType = "image/gif"
+				case "webp":
+					mimeType = "image/webp"
+				case "bmp":
+					mimeType = "image/bmp"
+				default:
+					mimeType = "application/octet-stream"
+				}
+			} else {
+				mimeType = "application/octet-stream"
+			}
+
+			encoded := base64.StdEncoding.EncodeToString(data)
+			return []mcp.ResourceContents{&mcp.BlobResourceContents{
+				URI:      CurrentResourceURI,
+				MIMEType: mimeType,
+				Blob:     encoded,
+			}}, nil
+		}
+	}
+
+	// Add resource to server
+	cs.mcpServer.AddResource(resource, handler)
+	cs.resourceRegistered = true
+
+	if os.Getenv("MCP_DEBUG") == "1" {
+		fmt.Fprintf(os.Stderr, "Registered current clipboard resource: %s\n", CurrentResourceURI)
+	}
+}
+
 func saveToTempFile(data []byte, extension string, cs *ClipboardServer) (string, error) {
 	// Clean up expired files before creating new ones
 	if err := cleanupExpiredFiles(); err != nil {
@@ -534,22 +668,16 @@ func handleBinaryContent(data []byte, cs *ClipboardServer) (*mcp.CallToolResult,
 	isImage, imageType := detectImageType(data)
 
 	if isImage {
-		filePath, err := saveToTempFile(data, imageType, cs)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to save image to temp file: %v", err)), nil
-		}
-		return mcp.NewToolResultText(fmt.Sprintf("Clipboard image content (%s, %d bytes). Saved to: %s", imageType, len(data), filePath)), nil
+		resourceURI := cs.getCurrentResourceURI()
+		return mcp.NewToolResultText(fmt.Sprintf("Clipboard image content (%s, %d bytes). Available as resource: %s", imageType, len(data), resourceURI)), nil
 	}
 
 	encoded := base64.StdEncoding.EncodeToString(data)
 	const maxDirectOutput = 25000
 
 	if len(encoded) > maxDirectOutput {
-		filePath, err := saveToTempFile([]byte(encoded), "b64", cs)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to save large binary content to temp file: %v", err)), nil
-		}
-		return mcp.NewToolResultText(fmt.Sprintf("Clipboard binary content too large (%d bytes base64). Saved to: %s", len(encoded), filePath)), nil
+		resourceURI := cs.getCurrentResourceURI()
+		return mcp.NewToolResultText(fmt.Sprintf("Clipboard binary content too large (%d bytes base64). Available as resource: %s", len(encoded), resourceURI)), nil
 	}
 
 	return mcp.NewToolResultText(fmt.Sprintf("Clipboard binary content (base64 encoded):\n%s", encoded)), nil
@@ -647,6 +775,227 @@ func printUsage() {
 `, os.Args[0], os.Args[0], os.Args[0])
 }
 
+// handleFileOutput extracts clipboard content directly to a file, using platform-specific methods
+func (cs *ClipboardServer) handleFileOutput(outputPath string) (*mcp.CallToolResult, error) {
+	if runtime.GOOS == "windows" {
+		return cs.handleWindowsFileOutput(outputPath)
+	}
+	
+	// Fallback for non-Windows: use x/clipboard and save to file
+	content, err := readClipboard()
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to read clipboard: %v", err)), nil
+	}
+	
+	if content == "" {
+		return mcp.NewToolResultText("Clipboard is empty"), nil
+	}
+	
+	var filePath string
+	var data []byte
+	
+	if isProbablyText(content) {
+		// Text content
+		data = []byte(content)
+		if outputPath != "" {
+			filePath = outputPath
+		} else {
+			var err error
+			filePath, err = saveToTempFile(data, "txt", cs)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to save text file: %v", err)), nil
+			}
+		}
+	} else {
+		// Binary content
+		data = []byte(content)
+		isImage, imageType := detectImageType(data)
+		ext := "bin"
+		if isImage {
+			ext = imageType
+		}
+		
+		if outputPath != "" {
+			filePath = outputPath
+		} else {
+			var err error
+			filePath, err = saveToTempFile(data, ext, cs)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to save binary file: %v", err)), nil
+			}
+		}
+	}
+	
+	// Write file if outputPath was specified
+	if outputPath != "" {
+		if err := os.WriteFile(filePath, data, 0644); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to write file %s: %v", filePath, err)), nil
+		}
+	}
+	
+	return mcp.NewToolResultText(fmt.Sprintf("Clipboard content saved to: %s (%d bytes)", filePath, len(data))), nil
+}
+
+// handleWindowsFileOutput uses PowerShell to extract clipboard content directly to files
+func (cs *ClipboardServer) handleWindowsFileOutput(outputPath string) (*mcp.CallToolResult, error) {
+	// First check what's in the clipboard using PowerShell
+	checkScript := `
+$clip = Get-Clipboard -Raw -ErrorAction SilentlyContinue
+if ($clip) {
+    Write-Output "text:$($clip.Length)"
+    exit 0
+}
+
+# Check for image
+try {
+    Add-Type -AssemblyName System.Windows.Forms
+    $image = [System.Windows.Forms.Clipboard]::GetImage()
+    if ($image) {
+        Write-Output "image:$($image.Width)x$($image.Height)"
+        exit 0
+    }
+} catch {}
+
+# Check for files
+try {
+    $files = [System.Windows.Forms.Clipboard]::GetFileDropList()
+    if ($files -and $files.Count -gt 0) {
+        Write-Output "files:$($files.Count)"
+        exit 0
+    }
+} catch {}
+
+Write-Output "empty"
+`
+	
+	cmd := exec.Command("powershell", "-NoProfile", "-Command", checkScript)
+	output, err := cmd.Output()
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to check clipboard: %v", err)), nil
+	}
+	
+	clipboardType := strings.TrimSpace(string(output))
+	
+	if clipboardType == "empty" {
+		return mcp.NewToolResultText("Clipboard is empty"), nil
+	}
+	
+	var filePath string
+	var fileSize int64
+	
+	if strings.HasPrefix(clipboardType, "text:") {
+		// Handle text content
+		
+		script := `Get-Clipboard -Raw`
+		if outputPath != "" {
+			script = fmt.Sprintf(`Get-Clipboard -Raw | Out-File -FilePath "%s" -Encoding UTF8`, outputPath)
+			filePath = outputPath
+		} else {
+			// Create temp file
+			tempFile, err := cs.createTempFile("txt")
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to create temp file: %v", err)), nil
+			}
+			filePath = tempFile
+			script = fmt.Sprintf(`Get-Clipboard -Raw | Out-File -FilePath "%s" -Encoding UTF8`, filePath)
+		}
+		
+		cmd := exec.Command("powershell", "-NoProfile", "-Command", script)
+		if err := cmd.Run(); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to save text clipboard: %v", err)), nil
+		}
+		
+		if info, err := os.Stat(filePath); err == nil {
+			fileSize = info.Size()
+		}
+		
+		return mcp.NewToolResultText(fmt.Sprintf("Text clipboard content saved to: %s (%d bytes)", filePath, fileSize)), nil
+		
+	} else if strings.HasPrefix(clipboardType, "image:") {
+		// Handle image content
+		dimensions := strings.TrimPrefix(clipboardType, "image:")
+		
+		if outputPath != "" {
+			filePath = outputPath
+		} else {
+			// Create temp file
+			tempFile, err := cs.createTempFile("png")
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("Failed to create temp file: %v", err)), nil
+			}
+			filePath = tempFile
+		}
+		
+		// PowerShell script to save image
+		script := fmt.Sprintf(`
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$image = [System.Windows.Forms.Clipboard]::GetImage()
+if ($image) {
+    $image.Save("%s", [System.Drawing.Imaging.ImageFormat]::Png)
+    Write-Output "Saved"
+} else {
+    Write-Output "Failed"
+}
+`, filePath)
+		
+		cmd := exec.Command("powershell", "-NoProfile", "-Command", script)
+		output, err := cmd.Output()
+		if err != nil || strings.TrimSpace(string(output)) != "Saved" {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to save image clipboard: %v", err)), nil
+		}
+		
+		if info, err := os.Stat(filePath); err == nil {
+			fileSize = info.Size()
+		}
+		
+		return mcp.NewToolResultText(fmt.Sprintf("Image clipboard content (%s) saved to: %s (%d bytes)", dimensions, filePath, fileSize)), nil
+		
+	} else if strings.HasPrefix(clipboardType, "files:") {
+		// Handle file list
+		count := strings.TrimPrefix(clipboardType, "files:")
+		
+		script := `
+Add-Type -AssemblyName System.Windows.Forms
+$files = [System.Windows.Forms.Clipboard]::GetFileDropList()
+foreach ($file in $files) {
+    Write-Output $file
+}
+`
+		
+		cmd := exec.Command("powershell", "-NoProfile", "-Command", script)
+		output, err := cmd.Output()
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to get file list: %v", err)), nil
+		}
+		
+		fileList := strings.TrimSpace(string(output))
+		return mcp.NewToolResultText(fmt.Sprintf("Clipboard contains %s files:\n%s", count, fileList)), nil
+	}
+	
+	return mcp.NewToolResultError("Unknown clipboard content type"), nil
+}
+
+// createTempFile creates a temp file and tracks it for cleanup
+func (cs *ClipboardServer) createTempFile(extension string) (string, error) {
+	timestamp := time.Now().Unix()
+	filename := fmt.Sprintf("mcp-clip-%d.%s", timestamp, extension)
+	tempDir := os.TempDir()
+	filePath := filepath.Join(tempDir, filename)
+	
+	// Create empty file
+	file, err := os.Create(filePath)
+	if err != nil {
+		return "", err
+	}
+	file.Close()
+	
+	// Track for cleanup
+	cs.addSessionFile(filePath)
+	
+	return filePath, nil
+}
+
 func handleTestCommand() {
 	fmt.Println("Testing clipboard functionality...")
 
@@ -677,3 +1026,4 @@ func handleTestCommand() {
 
 	fmt.Println("✅ Clipboard test completed successfully")
 }
+
