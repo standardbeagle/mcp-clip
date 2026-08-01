@@ -43,13 +43,15 @@ Add to your VSCode settings or workspace `.vscode/settings.json`:
 
 ## How it works
 
-- **WSL2**: mcp-clip bridges to the Windows clipboard through PowerShell — this is the reason
-  the server exists.
-- **Linux**: direct clipboard integration via `atotto/clipboard`.
+- **WSL2 → Windows clipboard**: for image and file-list content, `read_clipboard` shells out
+  to PowerShell to reach the Windows clipboard — this is the reason the server exists. This
+  path runs when a call passes `format: "file"` or `output_path`. Plain `format: "auto"` or
+  `"text"` reads use the same native clipboard access as Linux.
+- **Linux**: direct clipboard integration via `golang.design/x/clipboard`.
 - **macOS / Windows**: native clipboard support.
 
 <Aside type="tip">
-  Image content read through the WSL2 bridge is saved to a temp file with the correct
+  Image content read through the PowerShell path is saved to a temp file with the correct
   extension, and the path is returned — there's no way to hand a raw image blob back over
   stdio.
 </Aside>

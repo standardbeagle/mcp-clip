@@ -1,6 +1,6 @@
 # MCP Clipboard Server
 
-[![Go Version](https://img.shields.io/badge/go-1.21+-blue.svg)](https://golang.org)
+[![Go Version](https://img.shields.io/badge/go-1.24+-blue.svg)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
@@ -16,7 +16,7 @@ A high-performance, lock-free [Model Context Protocol (MCP)](https://modelcontex
 - 🖼️ **Image clipboard support** - PNG, JPEG, GIF, WebP, BMP detection and handling
 - 🛡️ **WSL2 compatibility** - Seamless Windows clipboard access from WSL2
 - 📁 **Large content handling** - Automatic temp file creation for content >25KB
-- 🔄 **Real-time monitoring** - Clipboard change notifications
+- 🔄 **Background monitoring** - Watches the clipboard for changes so the current content is always ready to read
 - 🧹 **Smart cleanup** - TTL-based temp file management
 - 🚀 **Race condition free** - Comprehensive atomic operations and CAS loops
 - 🔍 **Rich debugging** - Detailed error context and optional debug logging
@@ -107,24 +107,26 @@ Reads current clipboard content with automatic format detection.
 - Binary data (base64 encoded)
 
 **Large content handling:**
-- Content >25KB automatically saved to temp files
-- Images always saved as files with proper extensions
-- File paths provided for external access
+- Content over 25KB (the default `chunk_size`) is returned in numbered chunks, or as a
+  pointer to the `mcp-clip://current` resource, instead of one oversized response
+- Pass `format: "file"` or `output_path` to write the clipboard content to disk directly
+  (images always go through this path on Windows, via PowerShell)
+- File paths are returned in the tool result for external access
 
-## 📊 Resource Notifications
+## 📊 The `mcp-clip://current` Resource
 
-The server sends real-time notifications when clipboard content changes:
+The server also registers a `mcp-clip://current` resource that always reflects the current
+clipboard content, so a client can read it directly instead of calling `read_clipboard`:
 
 ```json
 {
-  "method": "notifications/resources/updated",
-  "params": {
-    "uri": "clipboard://current"
-  }
+  "uri": "mcp-clip://current"
 }
 ```
 
-This allows Claude to proactively know when new content is available without polling.
+The server tracks clipboard changes internally as they happen, but does not yet push
+`notifications/resources/updated` events to the client — polling `read_clipboard` or the
+resource is still required to see new content.
 
 ## ⚙️ Configuration
 
@@ -176,7 +178,7 @@ go build -race .
 
 ### Platform Integration
 - **WSL2**: PowerShell bridge for Windows clipboard
-- **Linux**: Direct clipboard integration via atotto/clipboard
+- **Linux**: Direct clipboard integration via golang.design/x/clipboard
 - **macOS**: Native clipboard support
 - **Windows**: Native clipboard support
 
@@ -248,7 +250,7 @@ MIT License - see [LICENSE](LICENSE) file for details.
 ## 🙏 Acknowledgments
 
 - [Model Context Protocol](https://modelcontextprotocol.io/) by Anthropic
-- [atotto/clipboard](https://github.com/atotto/clipboard) for cross-platform clipboard access
+- [golang.design/x/clipboard](https://github.com/golang-design/clipboard) for cross-platform clipboard access
 - [mcp-go](https://github.com/mark3labs/mcp-go) for Go MCP implementation
 
 ## 🔗 Links

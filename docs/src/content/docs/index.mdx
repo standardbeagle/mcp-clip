@@ -42,8 +42,8 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
     under all loads, verified with `go test -race`.
   </Card>
   <Card title="Image + binary aware" icon="seti:image">
-    Detects PNG, JPEG, GIF, WebP, and BMP. Large content (over 25KB) is automatically written to
-    a temp file instead of blowing up the response.
+    Detects PNG, JPEG, GIF, WebP, and BMP. Content over 25KB is returned in numbered chunks, or
+    as a pointer to the `mcp-clip://current` resource, instead of blowing up the response.
   </Card>
 </CardGrid>
 
@@ -64,9 +64,9 @@ whichever of those fits automatically — with chunking for large payloads.
 ```
 
 <CardGrid>
-  <Card title="Real-time notifications" icon="approve-check-circle">
-    The server exposes a `clipboard://current` resource and pushes
-    `notifications/resources/updated` on every clipboard change, so Claude doesn't have to poll.
+  <Card title="Always-current resource" icon="approve-check-circle">
+    The server exposes a `mcp-clip://current` resource that always reflects the latest clipboard
+    content, so a client can read it directly instead of calling `read_clipboard` again.
   </Card>
   <Card title="Smart cleanup" icon="setting">
     Temp files created for large or binary content are cleaned up on a TTL, configurable with
@@ -82,7 +82,7 @@ whichever of those fits automatically — with chunking for large payloads.
     [WSL2 setup →](/mcp-clip/guides/wsl2/)
   </Card>
   <Card title="Linux" icon="seti:shell">
-    Direct clipboard integration via `atotto/clipboard`.
+    Direct clipboard integration via `golang.design/x/clipboard`.
   </Card>
   <Card title="macOS &amp; Windows" icon="star">
     Native clipboard support on both.

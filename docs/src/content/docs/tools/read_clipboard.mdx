@@ -17,7 +17,7 @@ All parameters are optional.
 | Parameter | Description |
 |---|---|
 | `format` | Format to return clipboard content in: `text`, `base64`, `file`, or `auto` (default) |
-| `output_path` | Save binary content directly to the specified file path (Windows only, for images/binary) |
+| `output_path` | Save the clipboard content directly to the specified file path, instead of returning it inline |
 | `chunk_size` | For large content, split into chunks of this size in bytes. Default: `25000` |
 | `chunk_index` | Return a specific chunk index (0-based) for large content |
 
@@ -29,22 +29,25 @@ All parameters are optional.
 
 ## Large content handling
 
-- Content over 25KB is automatically saved to a temp file
-- Images are always saved as files, with proper extensions
-- File paths are provided for external access
+- Content over `chunk_size` (default 25000 bytes) is returned as numbered chunks, or as a
+  pointer to the `mcp-clip://current` resource — request a chunk with `chunk_index`, or read
+  the resource directly
+- Pass `format: "file"` or `output_path` to write the content to disk instead; on Windows this
+  path uses PowerShell to extract the clipboard, which is how images and file lists get saved
+- File paths are returned in the tool result for external access
 
-## Resource notifications
+## The `mcp-clip://current` resource
 
-The server also registers a `clipboard://current` resource and sends real-time
-notifications when clipboard content changes:
+The server also registers a `mcp-clip://current` resource that always reflects the current
+clipboard content:
 
 ```json
 {
-  "method": "notifications/resources/updated",
-  "params": {
-    "uri": "clipboard://current"
-  }
+  "uri": "mcp-clip://current"
 }
 ```
 
-This lets Claude know new clipboard content is available without polling `read_clipboard`.
+A client can read this resource directly instead of calling `read_clipboard` again. The server
+tracks clipboard changes internally as they happen, but does not yet push
+`notifications/resources/updated` events — reading the resource or the tool is still
+poll-based.
