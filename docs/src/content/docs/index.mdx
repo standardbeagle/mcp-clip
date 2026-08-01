@@ -1,6 +1,6 @@
 ---
-title: mcp-clip
-description: A high-performance, lock-free MCP server that provides clipboard access for AI assistants, with WSL2 support for the VSCode image-paste gap.
+title: Clipboard Access for AI Assistants (WSL2 Bridge)
+description: mcp-clip is a lock-free MCP server that gives AI assistants like Claude clipboard access to text, images, and binary data, including a WSL2 clipboard bridge.
 template: splash
 head:
   - tag: meta
@@ -16,6 +16,7 @@ head:
       rel: canonical
       href: https://dev.standardbeagle.com/mcp-clip/
 hero:
+  title: mcp-clip
   tagline: Clipboard access for AI assistants. Lock-free, WSL2-aware.
   actions:
     - text: Get Started
@@ -49,8 +50,9 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 
 ## One tool, four ways to read
 
-`read_clipboard` returns the current clipboard content as text, base64, a saved file, or
-whichever of those fits automatically — with chunking for large payloads.
+[`read_clipboard`](/mcp-clip/tools/read_clipboard/) returns the current clipboard content as
+text, base64, a saved file, or whichever of those fits automatically — with chunking for large
+payloads.
 
 ```json
 {

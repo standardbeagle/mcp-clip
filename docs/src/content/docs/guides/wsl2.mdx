@@ -1,6 +1,6 @@
 ---
-title: WSL2 Setup
-description: Bridge the Windows clipboard into WSL2 for image pastes in Claude.
+title: WSL2 to Windows Clipboard Bridge for Image Pastes
+description: How mcp-clip reads the Windows clipboard from inside WSL2, including the PowerShell extraction path used for images, and common troubleshooting steps.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -94,3 +94,8 @@ powershell.exe "Get-Clipboard"
 - Monitor with debug mode enabled
 - Check for antivirus interference
 - Verify WSL2 resource allocation
+
+## See also
+
+- [`read_clipboard` reference](/mcp-clip/tools/read_clipboard/) — the `format` and `output_path`
+  parameters that trigger the PowerShell path

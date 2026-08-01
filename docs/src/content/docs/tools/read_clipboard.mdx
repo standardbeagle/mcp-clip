@@ -1,6 +1,8 @@
 ---
-title: read_clipboard
-description: The read_clipboard MCP tool — parameters, formats, and resource notifications.
+title: "read_clipboard Tool: Parameters and Formats"
+description: "Reference for the read_clipboard MCP tool: its format, output_path, chunk_size, and chunk_index parameters, and how large clipboard content is chunked."
+sidebar:
+  label: read_clipboard
 ---
 
 `read_clipboard` reads the current clipboard content with automatic format detection. It is
@@ -51,3 +53,8 @@ A client can read this resource directly instead of calling `read_clipboard` aga
 tracks clipboard changes internally as they happen, but does not yet push
 `notifications/resources/updated` events — reading the resource or the tool is still
 poll-based.
+
+## See also
+
+- [Getting Started](/mcp-clip/getting-started/) — install mcp-clip and add it to your MCP client
+- [WSL2 setup](/mcp-clip/guides/wsl2/) — when `output_path` extraction goes through PowerShell
