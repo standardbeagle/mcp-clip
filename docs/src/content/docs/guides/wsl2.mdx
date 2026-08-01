@@ -1,0 +1,94 @@
+---
+title: WSL2 Setup
+description: Bridge the Windows clipboard into WSL2 for image pastes in Claude.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## The problem
+
+When Claude runs in VSCode on Windows with WSL2, pasting images from the clipboard doesn't
+work — the sandboxed environment can't reach the Windows clipboard. mcp-clip bridges WSL2 to
+the Windows clipboard (including images) through PowerShell.
+
+## Setup
+
+### 1. Install in WSL2
+
+```bash
+# In your WSL2 terminal
+npm install -g @standardbeagle/mcp-clip
+```
+
+### 2. Configure the Claude Code extension
+
+Add to your VSCode settings or workspace `.vscode/settings.json`:
+
+```json
+{
+  "claude-dev.mcpServers": {
+    "clipboard": {
+      "command": "mcp-clip",
+      "args": []
+    }
+  }
+}
+```
+
+### 3. Verify PowerShell access from WSL2
+
+```bash
+/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -Command "Get-Clipboard"
+```
+
+## How it works
+
+- **WSL2**: mcp-clip bridges to the Windows clipboard through PowerShell — this is the reason
+  the server exists.
+- **Linux**: direct clipboard integration via `atotto/clipboard`.
+- **macOS / Windows**: native clipboard support.
+
+<Aside type="tip">
+  Image content read through the WSL2 bridge is saved to a temp file with the correct
+  extension, and the path is returned — there's no way to hand a raw image blob back over
+  stdio.
+</Aside>
+
+## Troubleshooting
+
+**PowerShell not found**
+
+```bash
+sudo apt update && sudo apt install powershell
+```
+
+**Permission denied**
+
+```bash
+echo 'export PATH="/mnt/c/Windows/System32/WindowsPowerShell/v1.0:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+**Clipboard empty in WSL2**
+
+```bash
+powershell.exe "Get-Clipboard"
+```
+
+**MCP connection failed**
+
+- Verify `mcp-clip` is in your `PATH`
+- Check the Claude Desktop config JSON syntax
+- Restart Claude Desktop after config changes
+
+**Large images not working**
+
+- Check available disk space in the temp directory
+- Verify temp directory permissions
+- Enable debug mode: `MCP_DEBUG=1`
+
+**Performance issues**
+
+- Monitor with debug mode enabled
+- Check for antivirus interference
+- Verify WSL2 resource allocation

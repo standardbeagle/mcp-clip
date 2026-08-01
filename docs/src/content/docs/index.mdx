@@ -1,0 +1,90 @@
+---
+title: mcp-clip
+description: A high-performance, lock-free MCP server that provides clipboard access for AI assistants, with WSL2 support for the VSCode image-paste gap.
+template: splash
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: MCP, clipboard, WSL2, Claude, VSCode, AI, assistant, Model Context Protocol
+  - tag: meta
+    attrs:
+      property: og:image:alt
+      content: mcp-clip — clipboard access for AI assistants
+  - tag: link
+    attrs:
+      rel: canonical
+      href: https://dev.standardbeagle.com/mcp-clip/
+hero:
+  tagline: Clipboard access for AI assistants. Lock-free, WSL2-aware.
+  actions:
+    - text: Get Started
+      link: /mcp-clip/getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/standardbeagle/mcp-clip
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Why mcp-clip?
+
+<CardGrid>
+  <Card title="Solves the VSCode + WSL2 gap" icon="puzzle">
+    When Claude runs in VSCode on Windows with WSL2, pasting images from the clipboard fails —
+    the sandboxed environment can't see the Windows clipboard. mcp-clip bridges it.
+  </Card>
+  <Card title="Lock-free concurrency" icon="rocket">
+    Atomic operations and CAS loops throughout, zero mutexes in hot paths. Race-condition free
+    under all loads, verified with `go test -race`.
+  </Card>
+  <Card title="Image + binary aware" icon="seti:image">
+    Detects PNG, JPEG, GIF, WebP, and BMP. Large content (over 25KB) is automatically written to
+    a temp file instead of blowing up the response.
+  </Card>
+</CardGrid>
+
+## One tool, four ways to read
+
+`read_clipboard` returns the current clipboard content as text, base64, a saved file, or
+whichever of those fits automatically — with chunking for large payloads.
+
+```json
+{
+  "mcpServers": {
+    "clipboard": {
+      "command": "mcp-clip",
+      "args": []
+    }
+  }
+}
+```
+
+<CardGrid>
+  <Card title="Real-time notifications" icon="approve-check-circle">
+    The server exposes a `clipboard://current` resource and pushes
+    `notifications/resources/updated` on every clipboard change, so Claude doesn't have to poll.
+  </Card>
+  <Card title="Smart cleanup" icon="setting">
+    Temp files created for large or binary content are cleaned up on a TTL, configurable with
+    `MCP_CLEANUP_TTL` (default 1h).
+  </Card>
+</CardGrid>
+
+## Cross-platform
+
+<CardGrid>
+  <Card title="WSL2" icon="laptop">
+    Bridges to the Windows clipboard through PowerShell — the reason this server exists.
+    [WSL2 setup →](/mcp-clip/guides/wsl2/)
+  </Card>
+  <Card title="Linux" icon="seti:shell">
+    Direct clipboard integration via `atotto/clipboard`.
+  </Card>
+  <Card title="macOS &amp; Windows" icon="star">
+    Native clipboard support on both.
+  </Card>
+</CardGrid>

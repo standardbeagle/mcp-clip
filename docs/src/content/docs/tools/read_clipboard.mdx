@@ -1,0 +1,50 @@
+---
+title: read_clipboard
+description: The read_clipboard MCP tool — parameters, formats, and resource notifications.
+---
+
+`read_clipboard` reads the current clipboard content with automatic format detection. It is
+the only tool mcp-clip exposes.
+
+**Example usage in Claude:**
+
+> "Read my clipboard and analyze the content"
+
+## Parameters
+
+All parameters are optional.
+
+| Parameter | Description |
+|---|---|
+| `format` | Format to return clipboard content in: `text`, `base64`, `file`, or `auto` (default) |
+| `output_path` | Save binary content directly to the specified file path (Windows only, for images/binary) |
+| `chunk_size` | For large content, split into chunks of this size in bytes. Default: `25000` |
+| `chunk_index` | Return a specific chunk index (0-based) for large content |
+
+## Supported formats
+
+- Plain text
+- Images (PNG, JPEG, GIF, WebP, BMP)
+- Binary data (base64 encoded)
+
+## Large content handling
+
+- Content over 25KB is automatically saved to a temp file
+- Images are always saved as files, with proper extensions
+- File paths are provided for external access
+
+## Resource notifications
+
+The server also registers a `clipboard://current` resource and sends real-time
+notifications when clipboard content changes:
+
+```json
+{
+  "method": "notifications/resources/updated",
+  "params": {
+    "uri": "clipboard://current"
+  }
+}
+```
+
+This lets Claude know new clipboard content is available without polling `read_clipboard`.

@@ -1,0 +1,98 @@
+---
+title: Getting Started
+description: Install mcp-clip and wire it into your MCP client.
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+mcp-clip requires **Go 1.21+** if you build from source, or Node.js 14+ for the npm
+distribution, which ships a prebuilt binary for `darwin`, `linux`, and `win32` on `x64`/`arm64`.
+
+## Installation
+
+<Tabs>
+  <TabItem label="npm (recommended)">
+    ```bash
+    npm install -g @standardbeagle/mcp-clip
+    ```
+  </TabItem>
+  <TabItem label="go install">
+    ```bash
+    go install github.com/standardbeagle/mcp-clip@latest
+    ```
+  </TabItem>
+  <TabItem label="Manual">
+    ```bash
+    git clone https://github.com/standardbeagle/mcp-clip.git
+    cd mcp-clip
+    go build -o mcp-clip
+    sudo cp mcp-clip /usr/local/bin/
+    ```
+  </TabItem>
+</Tabs>
+
+## Configure your MCP client
+
+### Claude Desktop
+
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "clipboard": {
+      "command": "mcp-clip",
+      "args": []
+    }
+  }
+}
+```
+
+**Config file locations:**
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+### VSCode + Claude Code extension
+
+Add to your VSCode settings or workspace `.vscode/settings.json`:
+
+```json
+{
+  "claude-dev.mcpServers": {
+    "clipboard": {
+      "command": "mcp-clip",
+      "args": []
+    }
+  }
+}
+```
+
+<Aside type="tip">
+  Running inside WSL2? Install mcp-clip in the WSL2 distro, not Windows — see the
+  [WSL2 setup guide](/mcp-clip/guides/wsl2/) for the PowerShell bridge it needs.
+</Aside>
+
+## Verify the install
+
+```bash
+mcp-clip test
+```
+
+## Configuration
+
+### Environment variables
+
+- `MCP_DEBUG=1` — enable detailed debug logging (clipboard monitoring status, temp file
+  creation/cleanup, WSL2 PowerShell integration, rare race-condition fallbacks)
+- `MCP_CLEANUP_TTL=2h` — temp file cleanup TTL (default: `1h`)
+
+```bash
+MCP_DEBUG=1 mcp-clip
+```
+
+## Next steps
+
+- [Tool reference](/mcp-clip/tools/read_clipboard/) — the `read_clipboard` tool and its
+  parameters
+- [WSL2 setup](/mcp-clip/guides/wsl2/) — the PowerShell bridge and its troubleshooting steps
